@@ -1,0 +1,212 @@
+#!/bin/bash
+
+# v0.13 (11-01-2016)
+#      Fixed bug extracting executable from .desktop file (when TryExec is present)
+# v0.12 (18-09-2015)
+#      Fixed Bug 09, Cod 01+04 (logging)
+#      Bug 05: Does not check package dependencies (gnupg2 for example)
+#      Bug 03: When an error occurs, script still says everything went well. 
+#      Cod 02: Can temporary directory be encrypted, or made non-readable for other users for security? 
+#      Cod 03: Robustness of finding associated mimetype (e.g. text file interpretation, trailing / leading characters, multiple applications, non-existing applications, etc)
+# v0.11 (18-09-2015)
+#      Fixed Bug 07
+#      Bug 09: Does not test if file to be decripted exists
+#      Bug 05: Does not check package dependencies (gnupg2 for example)
+#      Bug 03: When an error occurs, script still says everything went well. 
+#      Cod 01: Implement functions for multiple occurring commands
+#      Cod 02: Can temporary directory be encrypted, or made non-readable for other users for security? 
+#      Cod 03: Robustness of finding associated mimetype (e.g. text file interpretation, trailing / leading characters, multiple applications, non-existing applications, etc)
+#      Cod 04: Does not show usage
+# v0.10 (18-08-2015)
+#      Fixed Bug 08
+#      Open Bugs:
+#      Bug 07: Assumes script is stored in /home/.../Documents to display script version
+#      Bug 05: Does not check package dependencies (gnupg2 for example)
+#      Bug 03: When an error occurs, script still says everything went well. 
+#      Cod 01: Implement functions for multiple occurring commands
+#      Cod 02: Can temporary directory be encrypted, or made non-readable for other users for security? 
+#      Cod 03: Robustness of finding associated mimetype (e.g. text file interpretation, trailing / leading characters, multiple applications, non-existing applications, etc)
+# v0.9 (18-08-2015)
+#      Now checks if file is already open, 
+#      Fixed Bug 06 and double checks decrypted file is still there when deleting old encrypted file
+#      Open Bugs:
+#      Bug 08: When user override list for mimetypes exists, it is automaticalle assumed it always contains a corresponding application
+#      Bug 07: Assumes script is stored in /home/.../Documents to display script version
+#      Bug 05: Does not check package dependencies (gnupg2 for example)
+#      Bug 03: When an error occurs, script still says everything went well. 
+#      Cod 01: Implement functions for multiple occurring commands
+#      Cod 02: Can temporary directory be encrypted, or made non-readable for other users for security? 
+# v0.8 (18-08-2015)
+#      Added logging
+#      Bug 06: Removes encrypted file if script has errors (causing file to be lost)
+#      Bug 07: Assumes script is stored in /home/.../Documents to display script version
+# v0.7 Implemented usage of a temporary direcory (17-08-2015)
+#      Implemented user overide mime type
+#      Bug 06: Removes encrypted file if script has errors (causing file to be lost)
+# v0.6 Fixed Bug 04
+# v0.5 Improved readability
+# v0.4 Fixed Bug 02
+#      Bug 05: Does not check package dependencies (gnupg2 for example)
+# v0.3 Intermediate version to sync correct version
+#      Bug 02: Filenames with spaces are not parsed well
+#      Bug 03: When an error occurs, script still says everything went well. 
+#      Bug 04: Saves even when file has not changed
+# v0.2 Fixed Bug 01 (01-06-2015)
+# v0.1 First version (17-2-2015?)
+#      Bug 01: Finding the executable for a mimetype is not robust. It only works when the executable is the same as  
+
+###############
+# Usage info
+###############
+function display_usage() { 
+  echo "gpg-thunar: open end edit gpg files with associated gnome/xfce application. " 
+  echo -e "Usage:\n$0 engrypted_file.gpg" 
+  echo -e "$0 --help (or -h)" 
+  echo "Copyright JHeller"
+}
+
+if [  $# -ne 1 ];                                                         # if number of arguments <>1
+then 
+  display_usage
+  exit 1
+fi 
+
+if [[ ( $1 == "--help") ||  $1 == "-h" ]];                                 # check whether user had supplied -h or --help . If yes display usage 
+then 
+  display_usage
+  exit 0
+fi 
+
+###############
+# Set variables
+###############
+tempdirectory="$HOME/.gpg-thunar/"
+encrypted_file="$1"
+stripped_encrypted_file="${encrypted_file:0:${#encrypted_file}-4}"         # Assumes 3-letter file extensions .gpg
+decrypted_file="$tempdirectory${stripped_encrypted_file##*/}"
+scriptfile="`dirname $0`/`basename $0`"
+
+###############
+# Initialize
+###############
+if [ ! -d "$tempdirectory" ];                                              # Check if temporary directory exists
+then
+  mkdir "$tempdirectory"                                                   # Create if it doesn't exist
+fi
+
+function printlog {                                                        # function declaration for logging
+  echo "$(date +%F,%T) $1" | tee -a "$tempdirectory/gpg-thunar.log" 
+} 
+
+###############
+# Info
+###############
+printlog "+++++++++++++++"
+printlog "gpg-thunar $(sed -n '3p' < $scriptfile)"
+printlog "+++++++++++++++"
+printlog "encrypted file: $encrypted_file"
+printlog "decrypted file: $decrypted_file"
+
+###############
+# Check if file exists or is already open
+###############
+if [ ! -f "$encrypted_file" ];                                             # Check if file is present
+then
+  printlog "[E] file not found, exiting..."
+  exit 1
+fi
+
+if [ -f "$decrypted_file" ];                                               # Check if file is already open
+then
+  printlog "[E] decrypted file already present, exiting..."
+  exit 1
+fi
+
+###############
+# Decrypt
+###############
+
+gpg2 -o "$decrypted_file" "$encrypted_file"                                # Decrypt
+
+decrypt_time=$(stat -c '%Y' "$decrypted_file")                             # Get timestamp for check if file has been updated
+
+###############
+# Determine Mimetype and associated Application
+###############
+
+mime_type=$(xdg-mime query filetype $decrypted_file)                       # Determine associated file type (used later to determine user override application)
+printlog "mime type: $mime_type"
+
+default_application_desktop=$(xdg-mime query default "$(xdg-mime query filetype "$decrypted_file")") # Determine associated default application .desktop file
+printlog "default .desktop file found for mimetype: $default_application_desktop"
+
+if [ -f "$HOME/.config/mimeapps.list" ];                                   # Check if user overrides mimetype list exists
+then
+  printlog "user override list found"
+  if grep -Fq $mime_type "$HOME/.config/mimeapps.list";                    # Check if mimetype exists in user ovveride list
+  then
+    printlog "user override found for mimetype"
+    default_application_desktop=$(cat $HOME/.config/mimeapps.list |grep -m 1 $mime_type)
+    default_application_desktop=${default_application_desktop#*=}          # Strip all text before "="
+    default_application_desktop=${default_application_desktop%%;*}         # Strip all text before first ";"
+    printlog "user override .desktop file found for mimetype: $default_application_desktop"
+  else
+    printlog "no user override found for mimetype"
+  fi
+fi
+
+default_application_exec=$(cat /usr/share/applications/$default_application_desktop |grep Exec|grep -v TryExec) # Get Exec string from .desktop file, exclude TryExec
+
+default_application=${default_application_exec#Exec=}                      # Strip Exec from string
+
+set -- $default_application                                                # Get first word from string
+default_application=$1
+printlog "executable for mimetype: $default_application"
+
+if type "$default_application" > /dev/null;                                # check if the application exists
+then
+  printlog "associated application found"
+else
+  printlog "associated application not found, exiting..."
+  exit 1
+fi
+
+printlog "associating application to open file: $default_application"      # Print default executable
+
+###############
+# Launch associated Application
+###############
+
+${default_application} "$decrypted_file" &                                 # Launch associated default application
+
+while ps x| grep ${default_application}| grep -vq grep                     # Wait until launched application process terminates
+do                                                                         # Note: some applications launch a sub-window, the complete application needs to be terminated
+  sleep 1
+done
+
+modified_time=$(stat -c '%Y' "$decrypted_file")                            # Get timestamp again for check if file has been updated
+
+###############
+# Encrypt if needed
+###############
+
+if [ "$modified_time" = "$decrypt_time" ];
+then
+    printlog "file has not been modified"
+else
+    printlog "file has been modified"
+    if [ -f "$decrypted_file" ];                                           # Double check that decrypted file still exists before removing encrypted file
+    then    
+        rm -f "$encrypted_file"                                            # Delete old encrypted file
+        gpg2 -o "$encrypted_file" -c "$decrypted_file"                     # Encrypt new file
+        printlog "encrypted file again"
+    else
+        printlog "[E] could not find decrypted file for encryption"
+        exit 1
+    fi
+fi
+
+rm -f "$decrypted_file"                                                    # Delete decrypted file
+
+printlog "exiting..."
+exit 0
